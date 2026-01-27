@@ -69,6 +69,16 @@ azd init -t microsoft/healthcare-ai-model-evaluator
 azd up
 ```
 
+### First-time Setup
+
+After deployment, create your first admin user by running:
+
+```bash
+./infra/scripts/create-admin-user.sh
+```
+
+This script will prompt you for admin credentials and create the user in the database. The admin user can then log in and manage other users through the web interface.
+
 ## Local Development
 
 ### Frontend setup
@@ -168,6 +178,9 @@ Before using this tool, verify that:
 2. Appropriate consents or legal bases for processing have been obtained where required.
 3. You have the legal right, authority, and ownership to use the data, and its use here does not violate any contractual, licensing, or proprietary restrictions.  
 4. All downstream uses of the data remain compliant with relevant laws and regulations.
+
+>[!IMPORTANT] 
+Dataset added to the tool are set to auto delete 180 days after being added.  This setting can be extended for each data set.
 
 >[!IMPORTANT] 
 > Microsoft products and services (1) are not designed, intended, or made available as a medical device, and (2) are not designed or intended to replace professional medical advice, diagnosis, treatment, or judgment and should not be used as a substitute for professional medical advice, diagnosis, treatment, or judgment. Customers and partners are responsible for ensuring that their solutions comply with all applicable laws and regulations.

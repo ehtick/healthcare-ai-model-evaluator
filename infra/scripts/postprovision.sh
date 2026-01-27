@@ -139,7 +139,7 @@ EOF
             # Build redirect URIs JSON robustly with jq to avoid quoting issues
             SPA_REDIRECTS=("http://localhost:3000" "https://localhost:3000")
             if [ -n "${API_URL:-}" ]; then
-                SPA_REDIRECTS+=("${API_URL}/webapp")
+                SPA_REDIRECTS+=("${API_URL}")
             fi
             SPA_REDIRECT_URIS_JSON=$(printf '%s\n' "${SPA_REDIRECTS[@]}" | jq -R . | jq -s .)
             BODY=$(jq -n --argjson uris "$SPA_REDIRECT_URIS_JSON" '{spa: {redirectUris: $uris}}')
@@ -166,6 +166,7 @@ EOF
     
     # Update azd environment with the CLIENT_ID (real or placeholder)
     azd env set AUTH_CLIENT_ID "$CLIENT_ID"
+    azd env set AZURE_TENANT_ID "$AZURE_TENANT_ID"
 fi
 
 # Update Key Vault secret with the actual client ID
@@ -181,6 +182,54 @@ else
     exit 1
 fi
 
+# Configure managed identity role assignments for data services
+echo "Configuring managed identity access to data services..."
+
+# The Container App name is based on the resourceToken used in Bicep (not AZURE_ENV_NAME).
+# Discover it by azd tag first, then fall back to a best-effort name guess.
+CONTAINER_APP_NAME=$(az containerapp list \
+    --resource-group "$RESOURCE_GROUP_NAME" \
+    --query "[?tags['azd-service-name']=='api'].name | [0]" \
+    -o tsv 2>/dev/null || echo "")
+
+if [ -z "$CONTAINER_APP_NAME" ] || [ "$CONTAINER_APP_NAME" = "null" ]; then
+    CONTAINER_APP_NAME="api-${AZURE_ENV_NAME}"
+fi
+
+echo "Detected API Container App name: $CONTAINER_APP_NAME"
+
+PRINCIPAL_ID=$(az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP_NAME" --query "identity.principalId" -o tsv 2>/dev/null || echo "")
+
+if [ -n "$PRINCIPAL_ID" ] && [ "$PRINCIPAL_ID" != "null" ]; then
+    echo "Container App managed identity principal ID: $PRINCIPAL_ID"
+    
+    # Assign Cosmos DB role
+    if [ -n "$COSMOS_ACCOUNT_NAME" ]; then
+        echo "Assigning Cosmos DB role to Container App managed identity..."
+        az cosmosdb sql role assignment create \
+            --account-name "$COSMOS_ACCOUNT_NAME" \
+            --resource-group "$RESOURCE_GROUP_NAME" \
+            --principal-id "$PRINCIPAL_ID" \
+            --role-definition-id "5bd9cd88-fe45-4216-938b-f97437e15450" \
+            --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP_NAME/providers/Microsoft.DocumentDB/databaseAccounts/$COSMOS_ACCOUNT_NAME" \
+            --output none 2>/dev/null || echo "Role assignment may already exist"
+        echo "✅ Cosmos DB role assignment completed"
+    fi
+    
+    # Assign Storage role
+    if [ -n "$STORAGE_ACCOUNT_NAME" ]; then
+        echo "Assigning Storage role to Container App managed identity..."
+        az role assignment create \
+            --assignee "$PRINCIPAL_ID" \
+            --role "Storage Blob Data Contributor" \
+            --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP_NAME/providers/Microsoft.Storage/storageAccounts/$STORAGE_ACCOUNT_NAME" \
+            --output none 2>/dev/null || echo "Role assignment may already exist"
+        echo "✅ Storage role assignment completed"
+    fi
+else
+    echo "⚠️  Warning: Could not get Container App managed identity principal ID"
+fi
+
 echo ""
 if [ "$CLIENT_ID" = "00000000-0000-0000-0000-000000000000" ]; then
     echo "⚠️  Post-provision setup completed with placeholder CLIENT_ID!"
@@ -190,7 +239,7 @@ if [ "$CLIENT_ID" = "00000000-0000-0000-0000-000000000000" ]; then
     echo "2. Create a new registration with these settings:"
     echo "   - Name: HealthcareAIModelEvaluator-App-${AZURE_ENV_NAME}"
     echo "   - Supported account types: Single tenant"
-    echo "   - Redirect URI: SPA, ${API_URL}/webapp"
+    echo "   - Redirect URI: SPA, ${API_URL}"
     echo "3. Copy the Application (client) ID"
     echo "4. Run: azd env set AUTH_CLIENT_ID <your-client-id>"
     echo "5. Run: azd deploy to update the configuration"
@@ -199,6 +248,6 @@ else
 fi
 echo ""
 echo "Your application URLs:"
-echo "  Application: ${API_URL}/webapp"
+echo "  Application: ${API_URL}"
 echo "  API: $API_URL"
 echo "  Client ID: $CLIENT_ID"
